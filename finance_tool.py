@@ -3,7 +3,8 @@ import re
 import sys
 import warnings
 import time
-import winsound
+import subprocess
+
 import pandas as pd
 from tabulate import tabulate
 from rich.console import Console
@@ -12,7 +13,15 @@ from rich.prompt import Prompt
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.panel import Panel
-import msvcrt
+
+IS_WINDOWS = os.name == "nt"
+
+if IS_WINDOWS:
+    import msvcrt  # type: ignore
+    import winsound  # type: ignore
+else:  # pragma: no cover - платформа без Windows
+    msvcrt = None  # type: ignore[assignment]
+    winsound = None  # type: ignore[assignment]
 
 warnings.simplefilter("ignore", UserWarning)
 console = Console()
@@ -30,6 +39,17 @@ def log(msg):
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(msg + "\n")
     console.log(msg)
+
+
+def _notify_beep():
+    """Воспроизводит звуковой сигнал, если поддерживается ОС."""
+
+    if winsound is None:
+        return
+    try:
+        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+    except Exception:
+        pass
 
 
 # === Попытка конвертации .xls → .xlsx (если Excel установлен) ===
@@ -184,16 +204,33 @@ def rich_table(df, page_size=20):
             table.add_row(*[str(x) for x in row.values])
         console.print(table)
         if i < pages - 1:
-            console.print("[dim]Enter — следующая страница, Esc — выход[/]")
-            while True:
-                key = msvcrt.getch()
-                if key == b"\r":
-                    break
-                elif key == b"\x1b":
-                    console.print("[yellow]Выход из просмотра таблицы[/]")
-                    return
+            if not wait_for_next_page():
+                return
         else:
             console.print("[green]✅ Конец таблицы[/]")
+
+
+def wait_for_next_page():
+    """Ожидает подтверждение перехода к следующей странице."""
+
+    console.print("[dim]Enter — следующая страница, 'выход' или Esc — завершить просмотр[/]")
+    if msvcrt is not None:
+        while True:  # pragma: no cover - зависит от ввода пользователя
+            key = msvcrt.getch()
+            if key in {b"\r", b"\n"}:
+                return True
+            if key in {b"\x1b", b"q", b"Q"}:
+                console.print("[yellow]Выход из просмотра таблицы[/]")
+                return False
+    else:
+        response = Prompt.ask(
+            "Нажмите Enter для продолжения или введите 'выход' для завершения",
+            default="",
+        )
+        if response.strip().lower() in {"выход", "exit", "quit", "q"}:
+            console.print("[yellow]Выход из просмотра таблицы[/]")
+            return False
+    return True
 
 
 # === Этап 1. Красивая анимация загрузки + интерактивное меню ===
@@ -243,7 +280,7 @@ with Live(spinner, console=console, refresh_per_second=10):
 elapsed = time.time() - start_time
 spinner.text = "[green]✅ Анализ завершён![/]"
 time.sleep(0.5)
-winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+_notify_beep()
 console.print(f"\n[green]⏱ Время сканирования:[/] {elapsed:.2f} сек\n")
 
 if not target_files:
@@ -324,6 +361,19 @@ def show_errors():
         console.print("[green]✅ Все файлы успешно прочитаны![/]")
 
 
+def open_file(path):
+    """Открыть файл с учётом ОС пользователя."""
+
+    try:
+        if IS_WINDOWS:
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.run([opener, path], check=False)
+    except Exception as exc:
+        console.print(f"[red]⚠️ Не удалось открыть файл: {exc}[/]")
+
+
 def open_company(company_name):
     """Открытие и отображение данных по компании"""
     company_files = [f for f in target_files if os.path.basename(os.path.dirname(f)) == company_name]
@@ -347,7 +397,7 @@ def open_company(company_name):
     action = Prompt.ask("Введите действие (1 — открыть, 2 — таблица)", choices=["1", "2"], default="2", show_choices=False)
     df = smart_read_excel(selected_file)
     if action == "1":
-        os.startfile(selected_file)
+        open_file(selected_file)
     elif action == "2":
         rich_table(df)
 
