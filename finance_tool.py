@@ -250,37 +250,40 @@ console.print(panel)
 time.sleep(1)
 
 excel_exts = {".xlsx", ".xls", ".xlsm"}
-name_keywords = ["6.4", "перечень", "список", "работник", "сотрудник", "остат", "отпуск", "штат"]
 
-target_files = []
 phrases = [
     "Ищу файлы с остатками отпусков...",
     "Анализирую структуру каталогов...",
     "Проверяю кодировки Excel...",
     "Отслеживаю скрытые файлы...",
-    "Собираю данные по компаниям..."
+    "Собираю данные по компаниям...",
 ]
 
-spinner = Spinner("dots", text="Сканирование папки...")
-start_time = time.time()
 
-with Live(spinner, console=console, refresh_per_second=10):
-    for root, _, files in os.walk(base_dir):
-        spinner.text = f"[cyan]{phrases[len(target_files) % len(phrases)]}[/]"
-        for file in files:
-            ext = os.path.splitext(file)[1].lower()
-            if ext in excel_exts:
-                lname = file.lower()
-                if any(k in lname for k in name_keywords):
-                    target_files.append(os.path.join(root, file))
-                else:
-                    target_files.append(os.path.join(root, file))
-        time.sleep(0.05)
+def collect_excel_files(root_dir: str) -> tuple[list[str], float]:
+    """Сканирует папку и возвращает найденные Excel-файлы и время сканирования."""
 
-elapsed = time.time() - start_time
-spinner.text = "[green]✅ Анализ завершён![/]"
-time.sleep(0.5)
-_notify_beep()
+    target_files: list[str] = []
+    spinner = Spinner("dots", text="Сканирование папки...")
+    start_time = time.time()
+
+    with Live(spinner, console=console, refresh_per_second=10):
+        for root, _, files in os.walk(root_dir):
+            spinner.text = f"[cyan]{phrases[len(target_files) % len(phrases)]}[/]"
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in excel_exts:
+                    target_files.append(os.path.join(root, file))
+            time.sleep(0.05)
+
+    elapsed = time.time() - start_time
+    spinner.text = "[green]✅ Анализ завершён![/]"
+    time.sleep(0.5)
+    _notify_beep()
+    return target_files, elapsed
+
+
+target_files, elapsed = collect_excel_files(base_dir)
 console.print(f"\n[green]⏱ Время сканирования:[/] {elapsed:.2f} сек\n")
 
 if not target_files:
@@ -290,7 +293,7 @@ if not target_files:
 console.print(f"[bold green]📁 Найдено файлов:[/] {len(target_files)}\n")
 
 # === Обработка Excel ===
-combined_df = pd.DataFrame()
+data_frames: list[pd.DataFrame] = []
 success, skipped = 0, 0
 
 for file_path in target_files:
@@ -307,12 +310,16 @@ for file_path in target_files:
         skipped += 1
         continue
     df.columns = [str(c).strip() for c in df.columns]
-    fio_col = next((c for c in df.columns if "фио" in c.lower() or "сотруд" in c.lower()), df.columns[0])
+    fio_col = next(
+        (c for c in df.columns if "фио" in c.lower() or "сотруд" in c.lower()), df.columns[0]
+    )
     df["Компания"] = company
     df["Файл"] = file_path
     df["ФИО"] = df[fio_col].astype(str).str.strip()
-    combined_df = pd.concat([combined_df, df], ignore_index=True)
+    data_frames.append(df)
     success += 1
+
+combined_df = pd.concat(data_frames, ignore_index=True) if data_frames else pd.DataFrame()
 
 console.print(f"\n[bold cyan]📊 Итог:[/]")
 console.print(f"  [green]Успешно прочитано:[/] {success}")
